@@ -11,6 +11,14 @@ Before working on the project, always update your local repository to avoid conf
 git pull
 git status
 
+# Notebook workflow
+The cleaned notebook flow is:
+
+1. `notebooks/01_preliminary_eda.ipynb` - exploratory analysis only.
+2. `notebooks/03_preprocessing.ipynb` - creates `X_train`, `y_train`, and `X_test`.
+3. `notebooks/04_feature_selection.ipynb` - selects the modeling feature set.
+4. `notebooks/06_logistic_regression.ipynb` - trains and evaluates the baseline model.
+
 # Commit
 After making changes commit and push them:
 git add .
