@@ -17,7 +17,11 @@ The cleaned notebook flow is:
 1. `notebooks/01_preliminary_eda.ipynb` - exploratory analysis only.
 2. `notebooks/03_preprocessing.ipynb` - creates `X_train`, `y_train`, and `X_test`.
 3. `notebooks/04_feature_selection.ipynb` - selects the modeling feature set.
-4. `notebooks/06_logistic_regression.ipynb` - trains and evaluates the baseline model.
+4. `notebooks/06_logistic_regression.ipynb` - compares baseline and gradient-boosting models, then prepares test predictions.
+
+# Main libraries
+The project uses `pandas`, `numpy`, `matplotlib`, `seaborn`, `scikit-learn`, and `optuna`.
+For stronger tabular models, the modeling notebook also supports `LightGBM`, `XGBoost`, and `CatBoost` when they are installed.
 
 # Commit
 After making changes commit and push them:
