@@ -30,3 +30,5 @@ git commit -m "Write a clear commit message"
 git push
 
 Do not modify the original dataset files directly. Work inside notebooks or scripts and keep the raw CSV files unchanged.
+
+Make sure to only commit the code of the Notebooks and not also the output, as to prevent useless code commit
