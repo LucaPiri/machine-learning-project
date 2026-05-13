@@ -2,3 +2,6 @@ pandas
 numpy
 scikit-learn>=1.3
 joblib
+matplotlib
+seaborn
+jupyter
