@@ -210,9 +210,9 @@ def save_outputs(
     if prediction_col not in submission.columns:
         prediction_col = submission.columns[-1]
 
-    model_submission = submission.copy()
-    model_submission[prediction_col] = test_predictions.astype(int)
-    model_submission.to_csv(outputs_dir / "model_submission.csv", index=False)
+    final_submission = submission.copy()
+    final_submission[prediction_col] = test_predictions.astype(int)
+    final_submission.to_csv(outputs_dir / "submission.csv", index=False)
 
     summary = pd.DataFrame([{
         "model": MODEL_NAME,

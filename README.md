@@ -49,7 +49,7 @@ python3 src/train_model.py
 ## Outputs
 
 ```text
-outputs/model_submission.csv
+outputs/submission.csv
 outputs/model_summary.csv
 outputs/classification_report.csv
 outputs/confusion_matrix.csv
