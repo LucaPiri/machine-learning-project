@@ -1,7 +1,7 @@
 {
   "depth": 6,
-  "iterations": 500,
+  "iterations": 350,
   "l2_leaf_reg": 5.0,
-  "learning_rate": 0.04,
+  "learning_rate": 0.06,
   "random_strength": 1.0
 }
