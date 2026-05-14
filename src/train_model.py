@@ -1,8 +1,14 @@
+"""Train and validate the final NYC 311 24-hour closure prediction model.
+
+The script is intentionally self-contained: it loads the raw CSV files, creates
+the target, builds model features, validates the model, and writes the final
+submission/report files into outputs/.
+"""
+
 import argparse
 import json
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -14,6 +20,8 @@ from catboost import CatBoostClassifier
 DATE_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 RANDOM_STATE = 42
 MODEL_NAME = "CatBoostClassifier with native categorical features"
+# These are the raw CSV columns chosen after EDA and feature-selection work.
+# Extra engineered features are created from them later in make_features().
 DEFAULT_INPUT_COLUMNS = [
     "Created Date",
     "Agency",
@@ -33,6 +41,8 @@ DEFAULT_INPUT_COLUMNS = [
     "Longitude",
 ]
 FORBIDDEN_FEATURE_COLUMNS = {"Closed Date"}
+# These tuned parameters are intentionally modest to keep training reproducible
+# while still giving CatBoost enough trees to learn nonlinear patterns.
 DEFAULT_MODEL_PARAMS = {
     "iterations": 500,
     "learning_rate": 0.04,
@@ -50,9 +60,11 @@ MODEL_PARAM_TYPES = {
 
 
 def parse_column_list(columns_text):
+    # If no column override is provided, use the final selected project columns.
     if columns_text is None:
         return DEFAULT_INPUT_COLUMNS
 
+    # Command-line column overrides are comma-separated for quick experiments.
     return [
         col.strip()
         for col in columns_text.split(",")
@@ -62,6 +74,8 @@ def parse_column_list(columns_text):
 
 def load_column_list(columns_file):
     columns_path = Path(columns_file)
+    # Blank lines and comments are allowed so config/model_columns.txt can be
+    # organized for a human reader.
     return [
         line.strip()
         for line in columns_path.read_text().splitlines()
@@ -76,6 +90,7 @@ def load_model_params(params_file):
     if not isinstance(loaded_params, dict):
         raise ValueError("Model parameter file must contain a JSON object.")
 
+    # Keep the parameter file strict so a typo cannot silently be ignored.
     unknown_params = sorted(set(loaded_params) - set(DEFAULT_MODEL_PARAMS))
     if unknown_params:
         raise ValueError(f"Unknown model parameters: {unknown_params}")
@@ -88,6 +103,8 @@ def load_model_params(params_file):
 
 
 def parse_model_params(args):
+    # Start from either the config JSON or the built-in defaults, then apply
+    # any command-line overrides on top.
     if args.params_file:
         params = load_model_params(args.params_file)
     else:
@@ -111,6 +128,8 @@ def validate_input_columns(columns, train_df, test_df):
     if not columns:
         raise ValueError("Select at least one input column.")
 
+    # The final model must use columns that exist in both train and test,
+    # because predictions are made on the unlabeled test file.
     duplicate_columns = sorted({
         col for col in columns
         if columns.count(col) > 1
@@ -138,6 +157,8 @@ def validate_input_columns(columns, train_df, test_df):
 
 
 def make_target(train_df):
+    # The label is created only from the training data; Closed Date is never
+    # passed into the model because it would reveal the answer.
     created = pd.to_datetime(
         train_df["Created Date"],
         format=DATE_FORMAT,
@@ -153,6 +174,8 @@ def make_target(train_df):
 
 
 def clean_numeric_column(series, decimal_comma=False):
+    # Some geographic values may use comma decimal separators, while ID-like
+    # numeric fields may use commas as thousands separators.
     cleaned = (
         series.astype("string")
         .str.strip()
@@ -183,6 +206,8 @@ def add_created_date_features(df):
     df["created_is_business_hour"] = created.dt.hour.between(9, 17).astype(int)
     df["created_minute_of_day"] = created.dt.hour * 60 + created.dt.minute
 
+    # Sine/cosine features keep cyclic time values close across boundaries
+    # such as 23:00 and 00:00.
     df["created_hour_sin"] = np.sin(2 * np.pi * df["created_hour"] / 24)
     df["created_hour_cos"] = np.cos(2 * np.pi * df["created_hour"] / 24)
     df["created_day_sin"] = np.sin(2 * np.pi * df["created_day_of_week"] / 7)
@@ -194,6 +219,8 @@ def add_created_date_features(df):
 def add_numeric_and_geo_features(df):
     df = df.copy()
 
+    # These columns may arrive as strings with commas or spaces, so they are
+    # normalized before CatBoost sees them.
     numeric_cols = [
         "Unique Key",
         "Incident Zip",
@@ -215,6 +242,8 @@ def add_numeric_and_geo_features(df):
         )
 
         if col != "Unique Key":
+            # A rounded categorical version lets CatBoost use location or code
+            # buckets as categories in addition to the numeric value.
             df[f"{col}_cat"] = (
                 df[col]
                 .round(0)
@@ -226,6 +255,8 @@ def add_numeric_and_geo_features(df):
     if {"Latitude", "Longitude"}.issubset(df.columns):
         nyc_latitude = 40.7128
         nyc_longitude = -74.0060
+        # This is a lightweight geographic proxy: farther requests may behave
+        # differently from requests near the city center.
         df["distance_from_nyc_center"] = np.sqrt(
             (df["Latitude"] - nyc_latitude) ** 2
             + (df["Longitude"] - nyc_longitude) ** 2
@@ -237,6 +268,8 @@ def add_numeric_and_geo_features(df):
 def add_categorical_interactions(df):
     df = df.copy()
 
+    # Pairwise interactions let the model learn combinations such as
+    # agency/problem or problem/borough instead of treating each field alone.
     pairs = [
         ("Agency", "Problem (formerly Complaint Type)"),
         ("Agency", "Problem Detail (formerly Descriptor)"),
@@ -269,6 +302,8 @@ def add_categorical_interactions(df):
 def add_high_signal_interactions(df):
     df = df.copy()
 
+    # These larger interactions were kept because service-request behavior is
+    # often determined by combinations of agency, problem type, and location.
     groups = [
         (
             "Agency",
@@ -315,6 +350,8 @@ def add_high_signal_interactions(df):
 
     for cols in groups:
         if all(col in df.columns for col in cols):
+            # Interaction values are kept as strings because CatBoost can use
+            # them as categorical combinations.
             interaction = df[cols[0]].astype(str).fillna("UNKNOWN")
             for col in cols[1:]:
                 interaction = (
@@ -330,6 +367,8 @@ def add_high_signal_interactions(df):
 def add_missing_and_length_features(df):
     df = df.copy()
 
+    # Missingness and text length can be predictive: some complaint types have
+    # richer descriptions or consistently missing address fields.
     text_cols = [
         "Problem Detail (formerly Descriptor)",
         "Additional Details",
@@ -351,6 +390,8 @@ def add_missing_and_length_features(df):
 def make_features(df, input_columns):
     df = df[input_columns].copy()
 
+    # All feature creation lives here so train, validation, and test data go
+    # through the same transformations.
     if "Created Date" in df.columns:
         df = add_created_date_features(df)
 
@@ -365,6 +406,8 @@ def make_features(df, input_columns):
         "Unnamed: 0",
     ]
 
+    # Drop raw helper columns after their information has been transformed into
+    # model-friendly features.
     return df.drop(columns=leakage_or_raw_cols, errors="ignore")
 
 
@@ -379,6 +422,8 @@ def prepare_catboost_features(feature_df):
     ]
 
     for col in categorical_cols:
+        # CatBoost handles categorical columns natively, but it expects clean
+        # string values and no missing markers.
         prepared[col] = (
             prepared[col]
             .astype("string")
@@ -387,6 +432,8 @@ def prepare_catboost_features(feature_df):
         )
 
     for col in numeric_cols:
+        # Invalid numeric values become NaN; CatBoost can handle missing numeric
+        # values during training.
         prepared[col] = pd.to_numeric(prepared[col], errors="coerce").astype(float)
 
     return prepared, categorical_cols
@@ -396,6 +443,8 @@ def build_model(model_params=None):
     if model_params is None:
         model_params = DEFAULT_MODEL_PARAMS
 
+    # CatBoost is a good fit here because the dataset contains many categorical
+    # service-request fields, and CatBoost can use those columns directly.
     return CatBoostClassifier(
         iterations=model_params["iterations"],
         learning_rate=model_params["learning_rate"],
@@ -409,14 +458,12 @@ def build_model(model_params=None):
         allow_writing_files=False,
     )
 
+
 def save_outputs(
     outputs_dir,
-    model,
     submission,
     test_predictions,
     validation_predictions,
-    training_predictions,
-    y_train,
     y_valid,
     training_accuracy,
     validation_accuracy,
@@ -424,15 +471,17 @@ def save_outputs(
     feature_count,
     input_columns,
     output_features,
-    model_params,
 ):
     outputs_dir.mkdir(exist_ok=True)
 
+    # Preserve the submission template shape and replace only the prediction
+    # column, which makes the output ready to submit.
     prediction_col = "prediction"
     if prediction_col not in submission.columns:
         prediction_col = submission.columns[-1]
 
     model_submission = submission.copy()
+    # Cast predictions to int so the submission column contains only 0/1 labels.
     model_submission[prediction_col] = test_predictions.astype(int)
     model_submission.to_csv(outputs_dir / "model_submission.csv", index=False)
 
@@ -461,11 +510,8 @@ def save_outputs(
             }
         ]
     )
+    # model_summary.csv is the compact file to read first when checking the run.
     summary.to_csv(outputs_dir / "model_summary.csv", index=False)
-    summary.rename(columns={"model": "final_model"}).to_csv(
-        outputs_dir / "validation_results.csv",
-        index=False,
-    )
 
     report = pd.DataFrame(
         classification_report(
@@ -474,43 +520,32 @@ def save_outputs(
             output_dict=True,
         )
     ).transpose()
+    # The classification report shows precision, recall, and F1 on the
+    # validation split for both target classes.
     report.to_csv(outputs_dir / "classification_report.csv")
-
-    training_report = pd.DataFrame(
-        classification_report(
-            y_train,
-            training_predictions,
-            output_dict=True,
-        )
-    ).transpose()
-    training_report.to_csv(outputs_dir / "training_classification_report.csv")
 
     confusion = pd.DataFrame(
         confusion_matrix(y_valid, validation_predictions),
         index=["actual_0", "actual_1"],
         columns=["predicted_0", "predicted_1"],
     )
+    # The confusion matrix is useful for seeing which class the model confuses.
     confusion.to_csv(outputs_dir / "confusion_matrix.csv")
 
-    joblib.dump(model, outputs_dir / "final_model_artifact.joblib")
     (outputs_dir / "selected_input_columns.txt").write_text(
         "\n".join(input_columns) + "\n"
     )
+    # This file lists the final engineered columns after feature creation, which
+    # is helpful when explaining what the model actually saw.
     (outputs_dir / "generated_model_features.txt").write_text(
         "\n".join(output_features) + "\n"
     )
-    (outputs_dir / "selected_model_params.json").write_text(
-        json.dumps(model_params, indent=2, sort_keys=True) + "\n"
-    )
-    if cv_summary:
-        (outputs_dir / "cross_validation_summary.json").write_text(
-            json.dumps(cv_summary, indent=2, sort_keys=True) + "\n"
-        )
 
     return summary, report, confusion
 
 
 def evaluate_train_valid_split(X, y, model_params):
+    # This fixed split gives one reproducible validation score for the report.
     X_train, X_valid, y_train, y_valid = train_test_split(
         X,
         y,
@@ -522,6 +557,8 @@ def evaluate_train_valid_split(X, y, model_params):
     X_valid_prepared, _ = prepare_catboost_features(X_valid)
 
     validation_model = build_model(model_params)
+    # use_best_model keeps the best iteration according to the validation set,
+    # which helps reduce overfitting during this diagnostic fit.
     validation_model.fit(
         X_train_prepared,
         y_train,
@@ -531,14 +568,13 @@ def evaluate_train_valid_split(X, y, model_params):
     )
     training_predictions = validation_model.predict(X_train_prepared).astype(int)
     validation_predictions = validation_model.predict(X_valid_prepared).astype(int)
+    # Training accuracy and validation accuracy are compared to estimate whether
+    # the model is underfitting or overfitting.
     training_accuracy = accuracy_score(y_train, training_predictions)
     validation_accuracy = accuracy_score(y_valid, validation_predictions)
 
     return {
-        "model": validation_model,
-        "training_predictions": training_predictions,
         "validation_predictions": validation_predictions,
-        "y_train": y_train,
         "y_valid": y_valid,
         "training_accuracy": training_accuracy,
         "validation_accuracy": validation_accuracy,
@@ -547,6 +583,7 @@ def evaluate_train_valid_split(X, y, model_params):
 
 def cross_validate_model(X, y, model_params, n_splits=5):
     rows = []
+    # Stratification keeps the class balance similar in each fold.
     splitter = StratifiedKFold(
         n_splits=n_splits,
         shuffle=True,
@@ -554,6 +591,8 @@ def cross_validate_model(X, y, model_params, n_splits=5):
     )
 
     for fold, (train_idx, valid_idx) in enumerate(splitter.split(X, y), start=1):
+        # Each fold repeats the full preparation and fitting process so the
+        # validation estimate is less dependent on one lucky split.
         X_train = X.iloc[train_idx]
         X_valid = X.iloc[valid_idx]
         y_train = y.iloc[train_idx]
@@ -584,6 +623,8 @@ def cross_validate_model(X, y, model_params, n_splits=5):
         })
 
     results = pd.DataFrame(rows)
+    # The gap columns are a simple bias/variance check: a very large train vs.
+    # validation gap would suggest overfitting.
     summary = {
         "folds": n_splits,
         "mean_training_accuracy": results["training_accuracy"].mean(),
@@ -685,6 +726,7 @@ def main():
     submission = pd.read_csv(data_dir / "submission.csv")
 
     if args.list_columns:
+        # Utility mode for checking the exact raw column names in train.csv.
         for col in train.columns:
             print(col)
         return
@@ -693,6 +735,7 @@ def main():
         raise ValueError("Use either --columns or --columns-file, not both.")
 
     if args.columns_file:
+        # The normal project run uses config/model_columns.txt.
         input_columns = load_column_list(args.columns_file)
     else:
         input_columns = parse_column_list(args.columns)
@@ -700,6 +743,8 @@ def main():
     input_columns = validate_input_columns(input_columns, train, test)
     model_params = parse_model_params(args)
 
+    # Build the same feature matrix for training and test data. The test matrix
+    # is reindexed to guarantee the exact same columns and order.
     y = make_target(train)
     X = make_features(train, input_columns)
     X_test = make_features(test, input_columns).reindex(
@@ -708,34 +753,33 @@ def main():
     )
 
     split_result = evaluate_train_valid_split(X, y, model_params)
-    training_predictions = split_result["training_predictions"]
     validation_predictions = split_result["validation_predictions"]
-    y_train = split_result["y_train"]
     y_valid = split_result["y_valid"]
     training_accuracy = split_result["training_accuracy"]
     validation_accuracy = split_result["validation_accuracy"]
 
     cv_summary = None
-    cv_results = None
     if args.cross_validate:
+        # Cross-validation is slower, but it shows whether the validation score
+        # is stable across different train/validation splits.
         cv_results, cv_summary = cross_validate_model(X, y, model_params)
         outputs_dir.mkdir(exist_ok=True)
         cv_results.to_csv(outputs_dir / "cross_validation_results.csv", index=False)
 
+    # After validation, train once more on all labeled rows before predicting
+    # the unlabeled test set.
     X_prepared, categorical_cols = prepare_catboost_features(X)
     X_test_prepared, _ = prepare_catboost_features(X_test)
     final_model = build_model(model_params)
     final_model.fit(X_prepared, y, cat_features=categorical_cols)
+    # These predictions are for data/test.csv, which has no target labels.
     test_predictions = final_model.predict(X_test_prepared).astype(int)
 
     summary, report, confusion = save_outputs(
         outputs_dir=outputs_dir,
-        model=final_model,
         submission=submission,
         test_predictions=test_predictions,
         validation_predictions=validation_predictions,
-        training_predictions=training_predictions,
-        y_train=y_train,
         y_valid=y_valid,
         training_accuracy=training_accuracy,
         validation_accuracy=validation_accuracy,
@@ -743,7 +787,6 @@ def main():
         feature_count=X.shape[1],
         input_columns=input_columns,
         output_features=X.columns.tolist(),
-        model_params=model_params,
     )
 
     print(f"Final model: {MODEL_NAME}")
