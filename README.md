@@ -50,7 +50,7 @@ The script then builds model features from the selected raw columns:
 - categorical interaction features, such as agency/problem/borough combinations
 - missing-value and text-length indicators
 
-Categorical features are encoded with scikit-learn `TargetEncoder`, and the classifier is a regularized `HistGradientBoostingClassifier`.
+Categorical features are passed directly to `CatBoostClassifier`, and numeric features are cleaned before training. The final selected column set keeps 16 raw columns after removing highly missing, ID-like, and redundant fields.
 
 ## Run In VSCode
 
@@ -66,11 +66,17 @@ Run the tuned model:
 python3 src/train_model.py --columns-file config/model_columns.txt --params-file config/model_params.json
 ```
 
+Run the tuned model with 5-fold bias/variance diagnostics:
+
+```bash
+python3 src/train_model.py --columns-file config/model_columns.txt --params-file config/model_params.json --cross-validate
+```
+
 The latest tuned validation result is:
 
-- Training accuracy: `0.9221`
+- Training accuracy: `0.9174`
 - Validation accuracy: `0.9031`
-- Train-validation gap: `0.0190`
+- Train-validation gap: `0.0143`
 
 The validation split is created from `data/train.csv` with a fixed random seed, so the result is reproducible.
 
@@ -89,6 +95,13 @@ outputs/generated_model_features.txt
 outputs/selected_input_columns.txt
 outputs/selected_model_params.json
 outputs/final_model_artifact.joblib
+```
+
+When run with `--cross-validate`, the script also creates:
+
+```text
+outputs/cross_validation_results.csv
+outputs/cross_validation_summary.json
 ```
 
 These files are generated artifacts. Recreate them by running the script instead of committing them.
@@ -110,7 +123,7 @@ config/model_params.json
 You can also override hyperparameters directly from the command line:
 
 ```bash
-python3 src/train_model.py --max-iter 480 --learning-rate 0.035 --max-leaf-nodes 31 --min-samples-leaf 150 --l2-regularization 0.2
+python3 src/train_model.py --iterations 500 --learning-rate 0.04 --depth 6 --l2-leaf-reg 5 --random-strength 1
 ```
 
 To list all raw columns available in `data/train.csv`:
@@ -124,5 +137,5 @@ python3 src/train_model.py --list-columns
 - Keep `data/train.csv`, `data/test.csv`, and `data/submission.csv` unchanged.
 - Do not add `Closed Date` to `config/model_columns.txt`.
 - `data/test.csv` has no labels, so reported accuracy and gap come from the validation split of `data/train.csv`.
-- The current tuned model uses 38 raw input columns and creates 83 final model features.
+- The current tuned model uses 16 raw input columns and creates 53 final model features.
 - Commit source, config, and notebooks. Do not commit generated model outputs.

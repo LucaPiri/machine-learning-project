@@ -5,20 +5,16 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import TargetEncoder
+from sklearn.model_selection import StratifiedKFold, train_test_split
+
+from catboost import CatBoostClassifier
 
 
 DATE_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 RANDOM_STATE = 42
-MODEL_NAME = "HistGradientBoostingClassifier with target-encoded features"
+MODEL_NAME = "CatBoostClassifier with native categorical features"
 DEFAULT_INPUT_COLUMNS = [
-    "Unique Key",
     "Created Date",
     "Agency",
     "Agency Name",
@@ -27,50 +23,29 @@ DEFAULT_INPUT_COLUMNS = [
     "Additional Details",
     "Location Type",
     "Incident Zip",
-    "Incident Address",
-    "Street Name",
-    "Cross Street 1",
-    "Cross Street 2",
-    "Intersection Street 1",
-    "Intersection Street 2",
     "Address Type",
     "City",
-    "Landmark",
-    "Facility Type",
     "Community Board",
-    "Council District",
     "Police Precinct",
-    "BBL",
     "Borough",
-    "X Coordinate (State Plane)",
-    "Y Coordinate (State Plane)",
     "Open Data Channel Type",
-    "Park Facility Name",
-    "Park Borough",
-    "Vehicle Type",
-    "Taxi Company Borough",
-    "Taxi Pick Up Location",
-    "Bridge Highway Name",
-    "Bridge Highway Direction",
-    "Road Ramp",
-    "Bridge Highway Segment",
     "Latitude",
     "Longitude",
 ]
 FORBIDDEN_FEATURE_COLUMNS = {"Closed Date"}
 DEFAULT_MODEL_PARAMS = {
-    "max_iter": 480,
-    "learning_rate": 0.035,
-    "max_leaf_nodes": 31,
-    "min_samples_leaf": 150,
-    "l2_regularization": 0.2,
+    "iterations": 500,
+    "learning_rate": 0.04,
+    "depth": 6,
+    "l2_leaf_reg": 5.0,
+    "random_strength": 1.0,
 }
 MODEL_PARAM_TYPES = {
-    "max_iter": int,
+    "iterations": int,
     "learning_rate": float,
-    "max_leaf_nodes": int,
-    "min_samples_leaf": int,
-    "l2_regularization": float,
+    "depth": int,
+    "l2_leaf_reg": float,
+    "random_strength": float,
 }
 
 
@@ -119,11 +94,11 @@ def parse_model_params(args):
         params = DEFAULT_MODEL_PARAMS.copy()
 
     cli_overrides = {
-        "max_iter": args.max_iter,
+        "iterations": args.iterations,
         "learning_rate": args.learning_rate,
-        "max_leaf_nodes": args.max_leaf_nodes,
-        "min_samples_leaf": args.min_samples_leaf,
-        "l2_regularization": args.l2_regularization,
+        "depth": args.depth,
+        "l2_leaf_reg": args.l2_leaf_reg,
+        "random_strength": args.random_strength,
     }
     for name, value in cli_overrides.items():
         if value is not None:
@@ -393,62 +368,46 @@ def make_features(df, input_columns):
     return df.drop(columns=leakage_or_raw_cols, errors="ignore")
 
 
-def build_model(feature_df, model_params=None):
-    if model_params is None:
-        model_params = DEFAULT_MODEL_PARAMS
-
-    categorical_cols = feature_df.select_dtypes(
+def prepare_catboost_features(feature_df):
+    prepared = feature_df.copy()
+    categorical_cols = prepared.select_dtypes(
         include=["object", "category", "string"]
     ).columns.tolist()
     numeric_cols = [
-        col for col in feature_df.columns
+        col for col in prepared.columns
         if col not in categorical_cols
     ]
 
-    numeric_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-        ]
-    )
+    for col in categorical_cols:
+        prepared[col] = (
+            prepared[col]
+            .astype("string")
+            .fillna("UNKNOWN")
+            .astype(str)
+        )
 
-    categorical_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="constant", fill_value="UNKNOWN")),
-            (
-                "target_encoder",
-                TargetEncoder(
-                    target_type="binary",
-                    cv=5,
-                    smooth="auto",
-                    random_state=RANDOM_STATE,
-                ),
-            ),
-        ]
-    )
+    for col in numeric_cols:
+        prepared[col] = pd.to_numeric(prepared[col], errors="coerce").astype(float)
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("numeric", numeric_pipeline, numeric_cols),
-            ("categorical", categorical_pipeline, categorical_cols),
-        ]
-    )
+    return prepared, categorical_cols
 
-    classifier = HistGradientBoostingClassifier(
-        max_iter=model_params["max_iter"],
+
+def build_model(model_params=None):
+    if model_params is None:
+        model_params = DEFAULT_MODEL_PARAMS
+
+    return CatBoostClassifier(
+        iterations=model_params["iterations"],
         learning_rate=model_params["learning_rate"],
-        max_leaf_nodes=model_params["max_leaf_nodes"],
-        min_samples_leaf=model_params["min_samples_leaf"],
-        l2_regularization=model_params["l2_regularization"],
-        random_state=RANDOM_STATE,
+        depth=model_params["depth"],
+        l2_leaf_reg=model_params["l2_leaf_reg"],
+        random_strength=model_params["random_strength"],
+        loss_function="Logloss",
+        eval_metric="Accuracy",
+        random_seed=RANDOM_STATE,
+        verbose=False,
+        allow_writing_files=False,
     )
-
-    return Pipeline(
-        steps=[
-            ("preprocessor", preprocessor),
-            ("classifier", classifier),
-        ]
-    )
-
 
 def save_outputs(
     outputs_dir,
@@ -461,6 +420,7 @@ def save_outputs(
     y_valid,
     training_accuracy,
     validation_accuracy,
+    cv_summary,
     feature_count,
     input_columns,
     output_features,
@@ -482,7 +442,19 @@ def save_outputs(
                 "model": MODEL_NAME,
                 "training_accuracy": round(training_accuracy, 4),
                 "validation_accuracy": round(validation_accuracy, 4),
+                "training_error": round(1 - training_accuracy, 4),
+                "validation_error": round(1 - validation_accuracy, 4),
                 "train_validation_gap": round(training_accuracy - validation_accuracy, 4),
+                "cv_mean_validation_accuracy": round(
+                    cv_summary["mean_validation_accuracy"], 4
+                ) if cv_summary else None,
+                "cv_validation_variance": round(
+                    cv_summary["variance_validation_accuracy_sample"], 8
+                ) if cv_summary else None,
+                "cv_validation_std": round(
+                    cv_summary["std_validation_accuracy_sample"], 4
+                ) if cv_summary else None,
+                "cv_mean_gap": round(cv_summary["mean_gap"], 4) if cv_summary else None,
                 "input_columns": len(input_columns),
                 "selected_features": feature_count,
                 "created_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -530,8 +502,107 @@ def save_outputs(
     (outputs_dir / "selected_model_params.json").write_text(
         json.dumps(model_params, indent=2, sort_keys=True) + "\n"
     )
+    if cv_summary:
+        (outputs_dir / "cross_validation_summary.json").write_text(
+            json.dumps(cv_summary, indent=2, sort_keys=True) + "\n"
+        )
 
     return summary, report, confusion
+
+
+def evaluate_train_valid_split(X, y, model_params):
+    X_train, X_valid, y_train, y_valid = train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
+    X_train_prepared, categorical_cols = prepare_catboost_features(X_train)
+    X_valid_prepared, _ = prepare_catboost_features(X_valid)
+
+    validation_model = build_model(model_params)
+    validation_model.fit(
+        X_train_prepared,
+        y_train,
+        cat_features=categorical_cols,
+        eval_set=(X_valid_prepared, y_valid),
+        use_best_model=True,
+    )
+    training_predictions = validation_model.predict(X_train_prepared).astype(int)
+    validation_predictions = validation_model.predict(X_valid_prepared).astype(int)
+    training_accuracy = accuracy_score(y_train, training_predictions)
+    validation_accuracy = accuracy_score(y_valid, validation_predictions)
+
+    return {
+        "model": validation_model,
+        "training_predictions": training_predictions,
+        "validation_predictions": validation_predictions,
+        "y_train": y_train,
+        "y_valid": y_valid,
+        "training_accuracy": training_accuracy,
+        "validation_accuracy": validation_accuracy,
+    }
+
+
+def cross_validate_model(X, y, model_params, n_splits=5):
+    rows = []
+    splitter = StratifiedKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+
+    for fold, (train_idx, valid_idx) in enumerate(splitter.split(X, y), start=1):
+        X_train = X.iloc[train_idx]
+        X_valid = X.iloc[valid_idx]
+        y_train = y.iloc[train_idx]
+        y_valid = y.iloc[valid_idx]
+        X_train_prepared, categorical_cols = prepare_catboost_features(X_train)
+        X_valid_prepared, _ = prepare_catboost_features(X_valid)
+
+        model = build_model(model_params)
+        model.fit(
+            X_train_prepared,
+            y_train,
+            cat_features=categorical_cols,
+            eval_set=(X_valid_prepared, y_valid),
+            use_best_model=True,
+        )
+        training_predictions = model.predict(X_train_prepared).astype(int)
+        validation_predictions = model.predict(X_valid_prepared).astype(int)
+        training_accuracy = accuracy_score(y_train, training_predictions)
+        validation_accuracy = accuracy_score(y_valid, validation_predictions)
+
+        rows.append({
+            "fold": fold,
+            "training_accuracy": training_accuracy,
+            "validation_accuracy": validation_accuracy,
+            "training_error": 1 - training_accuracy,
+            "validation_error": 1 - validation_accuracy,
+            "train_validation_gap": training_accuracy - validation_accuracy,
+        })
+
+    results = pd.DataFrame(rows)
+    summary = {
+        "folds": n_splits,
+        "mean_training_accuracy": results["training_accuracy"].mean(),
+        "mean_validation_accuracy": results["validation_accuracy"].mean(),
+        "mean_training_error": results["training_error"].mean(),
+        "mean_validation_error": results["validation_error"].mean(),
+        "mean_gap": results["train_validation_gap"].mean(),
+        "max_gap": results["train_validation_gap"].max(),
+        "min_gap": results["train_validation_gap"].min(),
+        "std_validation_accuracy_sample": results["validation_accuracy"].std(ddof=1),
+        "variance_validation_accuracy_sample": results["validation_accuracy"].var(ddof=1),
+        "min_validation_accuracy": results["validation_accuracy"].min(),
+        "max_validation_accuracy": results["validation_accuracy"].max(),
+        "validation_accuracy_range": (
+            results["validation_accuracy"].max()
+            - results["validation_accuracy"].min()
+        ),
+    }
+    return results, summary
 
 
 def parse_args():
@@ -562,18 +633,27 @@ def parse_args():
             f"{', '.join(DEFAULT_MODEL_PARAMS)}."
         ),
     )
-    parser.add_argument("--max-iter", type=int, help="Boosting iterations.")
+    parser.add_argument("--iterations", type=int, help="Boosting iterations.")
     parser.add_argument("--learning-rate", type=float, help="Boosting learning rate.")
-    parser.add_argument("--max-leaf-nodes", type=int, help="Maximum leaves per tree.")
     parser.add_argument(
-        "--min-samples-leaf",
+        "--depth",
         type=int,
-        help="Minimum samples per leaf.",
+        help="CatBoost tree depth.",
     )
     parser.add_argument(
-        "--l2-regularization",
+        "--l2-leaf-reg",
         type=float,
-        help="L2 regularization strength.",
+        help="CatBoost L2 leaf regularization.",
+    )
+    parser.add_argument(
+        "--random-strength",
+        type=float,
+        help="CatBoost random score strength.",
+    )
+    parser.add_argument(
+        "--cross-validate",
+        action="store_true",
+        help="Run 5-fold cross-validation and save bias/variance diagnostics.",
     )
     parser.add_argument(
         "--list-columns",
@@ -616,29 +696,26 @@ def main():
         fill_value=np.nan,
     )
 
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=RANDOM_STATE,
-        stratify=y,
-    )
+    split_result = evaluate_train_valid_split(X, y, model_params)
+    training_predictions = split_result["training_predictions"]
+    validation_predictions = split_result["validation_predictions"]
+    y_train = split_result["y_train"]
+    y_valid = split_result["y_valid"]
+    training_accuracy = split_result["training_accuracy"]
+    validation_accuracy = split_result["validation_accuracy"]
 
-    validation_model = build_model(X, model_params)
-    validation_preprocessor = validation_model.named_steps["preprocessor"]
-    validation_classifier = validation_model.named_steps["classifier"]
-    X_train_prepared = validation_preprocessor.fit_transform(X_train, y_train)
-    validation_classifier.fit(X_train_prepared, y_train)
-    training_predictions = validation_classifier.predict(
-        X_train_prepared
-    ).astype(int)
-    validation_predictions = validation_model.predict(X_valid).astype(int)
-    training_accuracy = accuracy_score(y_train, training_predictions)
-    validation_accuracy = accuracy_score(y_valid, validation_predictions)
+    cv_summary = None
+    cv_results = None
+    if args.cross_validate:
+        cv_results, cv_summary = cross_validate_model(X, y, model_params)
+        outputs_dir.mkdir(exist_ok=True)
+        cv_results.to_csv(outputs_dir / "cross_validation_results.csv", index=False)
 
-    final_model = build_model(X, model_params)
-    final_model.fit(X, y)
-    test_predictions = final_model.predict(X_test).astype(int)
+    X_prepared, categorical_cols = prepare_catboost_features(X)
+    X_test_prepared, _ = prepare_catboost_features(X_test)
+    final_model = build_model(model_params)
+    final_model.fit(X_prepared, y, cat_features=categorical_cols)
+    test_predictions = final_model.predict(X_test_prepared).astype(int)
 
     summary, report, confusion = save_outputs(
         outputs_dir=outputs_dir,
@@ -651,6 +728,7 @@ def main():
         y_valid=y_valid,
         training_accuracy=training_accuracy,
         validation_accuracy=validation_accuracy,
+        cv_summary=cv_summary,
         feature_count=X.shape[1],
         input_columns=input_columns,
         output_features=X.columns.tolist(),
@@ -660,7 +738,19 @@ def main():
     print(f"Final model: {MODEL_NAME}")
     print(f"Training accuracy: {training_accuracy:.4f}")
     print(f"Validation accuracy: {validation_accuracy:.4f}")
+    print(f"Training error (bias proxy): {1 - training_accuracy:.4f}")
+    print(f"Validation error: {1 - validation_accuracy:.4f}")
     print(f"Train-validation gap: {training_accuracy - validation_accuracy:.4f}")
+    if cv_summary:
+        print("5-fold bias/variance diagnostics:")
+        print(f"- Mean training accuracy: {cv_summary['mean_training_accuracy']:.4f}")
+        print(f"- Mean validation accuracy: {cv_summary['mean_validation_accuracy']:.4f}")
+        print(f"- Mean training error (bias proxy): {cv_summary['mean_training_error']:.4f}")
+        print(f"- Mean validation error: {cv_summary['mean_validation_error']:.4f}")
+        print(f"- Mean gap: {cv_summary['mean_gap']:.4f}")
+        print(f"- Max gap: {cv_summary['max_gap']:.4f}")
+        print(f"- Validation std: {cv_summary['std_validation_accuracy_sample']:.4f}")
+        print(f"- Validation variance: {cv_summary['variance_validation_accuracy_sample']:.8f}")
     print(f"Input columns: {len(input_columns)}")
     print(f"Feature count: {X.shape[1]}")
     print("Model parameters:")

@@ -1,7 +1,5 @@
 # Default raw input columns for the model.
-# Edit this file to test different feature sets, one column per line.
 # Do not add Closed Date: it is the answer source and is not available in test.csv.
-Unique Key
 Created Date
 Agency
 Agency Name
@@ -10,32 +8,11 @@ Problem Detail (formerly Descriptor)
 Additional Details
 Location Type
 Incident Zip
-Incident Address
-Street Name
-Cross Street 1
-Cross Street 2
-Intersection Street 1
-Intersection Street 2
 Address Type
 City
-Landmark
-Facility Type
 Community Board
-Council District
 Police Precinct
-BBL
 Borough
-X Coordinate (State Plane)
-Y Coordinate (State Plane)
 Open Data Channel Type
-Park Facility Name
-Park Borough
-Vehicle Type
-Taxi Company Borough
-Taxi Pick Up Location
-Bridge Highway Name
-Bridge Highway Direction
-Road Ramp
-Bridge Highway Segment
 Latitude
 Longitude
