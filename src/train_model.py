@@ -652,8 +652,19 @@ def parse_args():
     )
     parser.add_argument(
         "--cross-validate",
+        dest="cross_validate",
         action="store_true",
-        help="Run 5-fold cross-validation and save bias/variance diagnostics.",
+        default=True,
+        help=(
+            "Run 5-fold cross-validation and save bias/variance diagnostics. "
+            "This is enabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--no-cross-validate",
+        dest="cross_validate",
+        action="store_false",
+        help="Skip 5-fold cross-validation for a faster run.",
     )
     parser.add_argument(
         "--list-columns",

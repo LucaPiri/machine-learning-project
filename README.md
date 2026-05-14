@@ -60,16 +60,16 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Run the tuned model:
+Run the tuned model and generate all outputs, including 5-fold bias/variance diagnostics:
 
 ```bash
-python3 src/train_model.py --columns-file config/model_columns.txt --params-file config/model_params.json
+python3 src/train_model.py
 ```
 
-Run the tuned model with 5-fold bias/variance diagnostics:
+For a faster run without 5-fold diagnostics:
 
 ```bash
-python3 src/train_model.py --columns-file config/model_columns.txt --params-file config/model_params.json --cross-validate
+python3 src/train_model.py --no-cross-validate
 ```
 
 The latest tuned validation result is:
@@ -91,17 +91,12 @@ outputs/validation_results.csv
 outputs/classification_report.csv
 outputs/training_classification_report.csv
 outputs/confusion_matrix.csv
+outputs/cross_validation_results.csv
+outputs/cross_validation_summary.json
 outputs/generated_model_features.txt
 outputs/selected_input_columns.txt
 outputs/selected_model_params.json
 outputs/final_model_artifact.joblib
-```
-
-When run with `--cross-validate`, the script also creates:
-
-```text
-outputs/cross_validation_results.csv
-outputs/cross_validation_summary.json
 ```
 
 These files are generated artifacts. Recreate them by running the script instead of committing them.
