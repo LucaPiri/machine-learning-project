@@ -1,4 +1,4 @@
-"""Data cleaning and feature engineering for the NYC 311 model."""
+#Data cleaning and feature engineering for the NYC 311 model.
 
 import json
 from pathlib import Path
@@ -462,7 +462,7 @@ def save_processed_data(X_train, y_train, X_test, metadata, processed_dir):
 
 
 def load_processed_data(processed_dir=DEFAULT_PROCESSED_DIR):
-    """Load processed files created by preprocess_data.py."""
+    """Load processed files created by config/prepare_data.py."""
     paths = get_processed_paths(processed_dir)
     missing = [
         str(path)
@@ -472,7 +472,7 @@ def load_processed_data(processed_dir=DEFAULT_PROCESSED_DIR):
     if missing:
         raise FileNotFoundError(
             "Processed data files are missing. Run "
-            "`python3 src/preprocess_data.py` first. Missing files: "
+            "`python3 config/prepare_data.py` first. Missing files: "
             f"{missing}"
         )
 

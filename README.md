@@ -7,13 +7,17 @@ The final model is a `CatBoostClassifier`. Raw data is first converted into proc
 ## Project Structure
 
 ```text
-src/preprocessing.py       Cleaning and feature-engineering functions
-src/preprocess_data.py     Builds processed train/test files
-src/train_model.py         Trains the final model and creates predictions
-config/                    Selected columns and model parameters
+config/preprocessing.py    Cleaning and feature-engineering functions
+config/prepare_data.py     Builds processed train/test files
+config/train_and_evaluate_model.py
+                          Trains, validates, saves the model, and creates predictions
+config/create_report_figures.py
+                          Separately generates only the report figures
+config/                    Model parameters, selected columns, and data-prep code
 data/                      Raw train, test, and submission files
-notebooks/                 Analysis and development notebooks
-outputs/                   Generated processed data, reports, and submission
+final_submission_notebook.ipynb
+                          Notebook for reproducing final predictions
+outputs/                   Generated when the scripts are run
 ```
 
 ## Method
@@ -28,16 +32,35 @@ Install dependencies:
 pip install -r config/requirements.txt
 ```
 
+Simplest option: open and run every cell in:
+
+```text
+final_submission_notebook.ipynb
+```
+
+That notebook runs the whole workflow from raw CSV files to final outputs:
+processed data, validation metrics, trained model, prediction CSV, and report
+figures.
+
+Equivalent command-line workflow:
+
 Build processed data:
 
 ```bash
-python3 src/preprocess_data.py
+python3 config/prepare_data.py
 ```
 
-Train the model:
+Train the model and reproduce the cross-validation diagnostics:
 
 ```bash
-python3 src/train_model.py
+python3 config/train_and_evaluate_model.py --cross-validate
+```
+
+Generate the figures used in the report. This is intentionally separate from
+model training:
+
+```bash
+python3 config/create_report_figures.py
 ```
 
 ## Results
@@ -50,11 +73,14 @@ python3 src/train_model.py
 
 ```text
 outputs/submission.csv
+outputs/catboost_model.cbm
 outputs/model_summary.csv
 outputs/classification_report.csv
 outputs/confusion_matrix.csv
-outputs/processed/train_features.csv
-outputs/processed/target.csv
-outputs/processed/test_features.csv
-outputs/processed/metadata.json
+outputs/cross_validation_results.csv
+outputs/figures/
 ```
+
+The preprocessing step also creates `outputs/processed/` as an intermediate
+folder used by the training script. It can be regenerated at any time with
+`python3 config/prepare_data.py`.

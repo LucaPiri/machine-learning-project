@@ -1,11 +1,12 @@
-"""Train and validate the NYC 311 24-hour closure model.
+#Train, validate, save, and use the final NYC 311 CatBoost model.
 
-Run src/preprocess_data.py before this script so the processed feature files are
-available in outputs/processed/.
-"""
+#Run config/prepare_data.py before this script so the processed feature files are
+#available in outputs/processed/.
+
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -13,13 +14,17 @@ from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = PROJECT_ROOT / "config"
+if str(CONFIG_DIR) not in sys.path:
+    sys.path.insert(0, str(CONFIG_DIR))
+
 from preprocessing import DEFAULT_PROCESSED_DIR, load_processed_data
 
 
 RANDOM_STATE = 42
 MODEL_NAME = "CatBoostClassifier with native categorical features"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PARAMS_FILE = PROJECT_ROOT / "config" / "model_params.json"
+DEFAULT_PARAMS_FILE = CONFIG_DIR / "model_params.json"
 DEFAULT_MODEL_PARAMS = {
     "iterations": 350,
     "learning_rate": 0.06,
@@ -256,13 +261,6 @@ def save_outputs(
     )
     confusion.to_csv(outputs_dir / "confusion_matrix.csv")
 
-    (outputs_dir / "selected_input_columns.txt").write_text(
-        "\n".join(metadata["input_columns"]) + "\n"
-    )
-    (outputs_dir / "generated_model_features.txt").write_text(
-        "\n".join(metadata["output_features"]) + "\n"
-    )
-
     return summary, report, confusion
 
 
@@ -274,7 +272,7 @@ def parse_args():
     parser.add_argument(
         "--processed-dir",
         default=str(DEFAULT_PROCESSED_DIR),
-        help="Directory containing processed files from src/preprocess_data.py.",
+        help="Directory containing processed files from config/prepare_data.py.",
     )
     parser.add_argument(
         "--params-file",
@@ -304,7 +302,7 @@ def parse_args():
 def main():
     """Load processed features, validate the model, and save predictions."""
     args = parse_args()
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = PROJECT_ROOT
     data_dir = project_root / "data"
     outputs_dir = project_root / "outputs"
 
@@ -340,6 +338,8 @@ def main():
     # Train once more on all labeled rows before predicting the test set.
     final_model = build_model(model_params)
     final_model.fit(X_train, y_train, cat_features=categorical_cols)
+    outputs_dir.mkdir(exist_ok=True)
+    final_model.save_model(outputs_dir / "catboost_model.cbm")
     test_predictions = final_model.predict(X_test).astype(int)
 
     submission = pd.read_csv(data_dir / "submission.csv")
