@@ -1,0 +1,2 @@
+model,training_accuracy,validation_accuracy,training_error,validation_error,train_validation_gap,cv_mean_validation_accuracy,cv_validation_variance,cv_validation_std,cv_mean_gap,input_columns,selected_features,created_at_utc
+CatBoostClassifier with native categorical features,0.9181,0.9032,0.0819,0.0968,0.0148,0.8997,3.25e-06,0.0018,0.0168,16,53,2026-05-16T17:31:44.468288+00:00

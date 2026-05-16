@@ -1,8 +1,10 @@
-#Train, validate, save, and use the final NYC 311 CatBoost model.
+"""Train, validate, and use the final NYC 311 CatBoost model.
 
-#Run config/prepare_data.py before this script so the processed feature files are
-#available in outputs/processed/.
-
+The script builds features in memory from the raw CSV files, validates the
+model, trains again on all labeled rows, and writes only the final submission
+and evaluation tables. It does not save intermediate feature files or a model
+artifact because those are not needed for the submitted workflow.
+"""
 
 import argparse
 import json
@@ -19,7 +21,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 if str(CONFIG_DIR) not in sys.path:
     sys.path.insert(0, str(CONFIG_DIR))
 
-from preprocessing import DEFAULT_PROCESSED_DIR, load_processed_data
+from preprocessing import build_processed_datasets, load_column_list
 
 
 RANDOM_STATE = 42
@@ -207,7 +209,7 @@ def save_outputs(
     cv_summary,
     metadata,
 ):
-    """Save submission, validation diagnostics, and feature lists to outputs/."""
+    """Save the final submission and validation diagnostics to outputs/."""
     outputs_dir.mkdir(exist_ok=True)
 
     # Preserve the submission template and replace only the prediction column.
@@ -265,14 +267,9 @@ def save_outputs(
 
 
 def parse_args():
-    """Define command-line options for training from processed data."""
+    """Define command-line options for training the final model."""
     parser = argparse.ArgumentParser(
-        description="Train the NYC 311 closure-time model from processed files."
-    )
-    parser.add_argument(
-        "--processed-dir",
-        default=str(DEFAULT_PROCESSED_DIR),
-        help="Directory containing processed files from config/prepare_data.py.",
+        description="Train the NYC 311 closure-time model from raw CSV files."
     )
     parser.add_argument(
         "--params-file",
@@ -300,13 +297,17 @@ def parse_args():
 
 
 def main():
-    """Load processed features, validate the model, and save predictions."""
+    """Build features, validate the model, and save final predictions."""
     args = parse_args()
     project_root = PROJECT_ROOT
     data_dir = project_root / "data"
     outputs_dir = project_root / "outputs"
 
-    X_train, y_train, X_test, metadata = load_processed_data(args.processed_dir)
+    input_columns = load_column_list(CONFIG_DIR / "model_columns.txt")
+    X_train, y_train, X_test, metadata = build_processed_datasets(
+        data_dir=data_dir,
+        input_columns=input_columns,
+    )
     categorical_cols = metadata["categorical_cols"]
     model_params = parse_model_params(args)
 
@@ -338,8 +339,6 @@ def main():
     # Train once more on all labeled rows before predicting the test set.
     final_model = build_model(model_params)
     final_model.fit(X_train, y_train, cat_features=categorical_cols)
-    outputs_dir.mkdir(exist_ok=True)
-    final_model.save_model(outputs_dir / "catboost_model.cbm")
     test_predictions = final_model.predict(X_test).astype(int)
 
     submission = pd.read_csv(data_dir / "submission.csv")

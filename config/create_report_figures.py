@@ -1,15 +1,10 @@
-#Create only the figures used in the final written report.
+"""Create only the figures used in the final written report.
 
-#Run this after:
+Run this after the model script, because the confusion-matrix figure depends on
+outputs/confusion_matrix.csv. The script writes exactly the four PNG files
+referenced by the LaTeX report and does not create a figure index file.
+"""
 
-#    python3 config/prepare_data.py
-#    python3 config/train_and_evaluate_model.py --cross-validate
-
-#The script writes the four PNG files referenced by the LaTeX report to
-#outputs/figures/.
-
-
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -32,6 +27,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+from preprocessing import build_processed_datasets, load_column_list
 
 
 def setup_style():
@@ -56,17 +53,12 @@ def reset_figures_dir():
             old_file.unlink()
 
 
-def save_figure(fig, filename, title, description, registry):
-    """Save one figure and record it in the figure index."""
+def save_figure(fig, filename):
+    """Save one report figure."""
     path = FIGURES_DIR / filename
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
-    registry.append({
-        "file": str(path.relative_to(PROJECT_ROOT)),
-        "title": title,
-        "description": description,
-    })
 
 
 def add_bar_labels(ax, total=None):
@@ -105,7 +97,7 @@ def make_target(train_df):
     return ((hours_to_close >= 0) & (hours_to_close <= 24)).astype(int)
 
 
-def plot_target_distribution(train_df, registry):
+def plot_target_distribution(train_df):
     """Plot the class balance used to motivate the majority-class baseline."""
     target = make_target(train_df)
     counts = target.value_counts().reindex([0, 1], fill_value=0)
@@ -129,13 +121,10 @@ def plot_target_distribution(train_df, registry):
     save_figure(
         fig,
         "01_target_distribution.png",
-        "Target distribution",
-        "Class balance for the 24-hour closure target.",
-        registry,
     )
 
 
-def plot_creation_hour(train_df, registry):
+def plot_creation_hour(train_df):
     """Plot request volume by creation hour for the EDA section."""
     created = pd.to_datetime(
         train_df["Created Date"],
@@ -153,22 +142,16 @@ def plot_creation_hour(train_df, registry):
     save_figure(
         fig,
         "06_requests_by_creation_hour.png",
-        "Requests by creation hour",
-        "Temporal request pattern used to justify creation-time features.",
-        registry,
     )
 
 
-def plot_feature_set_summary(registry):
+def plot_feature_set_summary():
     """Plot raw input, final feature, and categorical feature counts."""
-    metadata_path = OUTPUTS_DIR / "processed" / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError(
-            "Missing outputs/processed/metadata.json. Run "
-            "`python3 config/prepare_data.py` before generating figures."
-        )
-
-    metadata = json.loads(metadata_path.read_text())
+    input_columns = load_column_list(PROJECT_ROOT / "config" / "model_columns.txt")
+    _, _, _, metadata = build_processed_datasets(
+        data_dir=DATA_DIR,
+        input_columns=input_columns,
+    )
     summary = pd.Series({
         "Raw selected inputs": len(metadata["input_columns"]),
         "Final model features": len(metadata["output_features"]),
@@ -194,13 +177,10 @@ def plot_feature_set_summary(registry):
     save_figure(
         fig,
         "09_feature_set_summary.png",
-        "Feature set summary",
-        "Counts selected inputs, final features, and categorical features.",
-        registry,
     )
 
 
-def plot_confusion_matrix(registry):
+def plot_confusion_matrix():
     """Plot the validation confusion matrix from the final model run."""
     confusion_path = OUTPUTS_DIR / "confusion_matrix.csv"
     if not confusion_path.exists():
@@ -229,26 +209,21 @@ def plot_confusion_matrix(registry):
     save_figure(
         fig,
         "13_confusion_matrix_heatmap.png",
-        "Validation confusion matrix",
-        "Validation-set correct predictions and error types.",
-        registry,
     )
 
 
 def main():
     setup_style()
     reset_figures_dir()
-    registry = []
 
     train_df = pd.read_csv(DATA_DIR / "train.csv")
 
-    plot_target_distribution(train_df, registry)
-    plot_creation_hour(train_df, registry)
-    plot_feature_set_summary(registry)
-    plot_confusion_matrix(registry)
+    plot_target_distribution(train_df)
+    plot_creation_hour(train_df)
+    plot_feature_set_summary()
+    plot_confusion_matrix()
 
-    pd.DataFrame(registry).to_csv(FIGURES_DIR / "figure_index.csv", index=False)
-    print(f"Generated {len(registry)} report figures in {FIGURES_DIR}")
+    print(f"Generated 4 report figures in {FIGURES_DIR}")
 
 
 if __name__ == "__main__":

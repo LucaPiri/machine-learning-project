@@ -1,6 +1,10 @@
-#Data cleaning and feature engineering for the NYC 311 model.
+"""Data cleaning and feature engineering for the NYC 311 model.
 
-import json
+The functions in this file start from the raw train/test CSV files and return
+CatBoost-ready feature matrices in memory. They deliberately do not write
+intermediate feature CSVs, so a clean run only produces the final outputs.
+"""
+
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +14,6 @@ import pandas as pd
 DATE_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_COLUMNS_FILE = PROJECT_ROOT / "config" / "model_columns.txt"
-DEFAULT_PROCESSED_DIR = PROJECT_ROOT / "outputs" / "processed"
 UNKNOWN_CATEGORY = "UNKNOWN"
 
 # Normal runs read config/model_columns.txt. This fallback just keeps the script
@@ -34,21 +37,6 @@ FALLBACK_INPUT_COLUMNS = [
     "Longitude",
 ]
 FORBIDDEN_FEATURE_COLUMNS = {"Closed Date"}
-PROCESSED_FILENAMES = {
-    "train_features": "train_features.csv",
-    "target": "target.csv",
-    "test_features": "test_features.csv",
-    "metadata": "metadata.json",
-}
-
-
-def get_processed_paths(processed_dir=DEFAULT_PROCESSED_DIR):
-    """Return the expected processed-data file paths."""
-    processed_dir = Path(processed_dir)
-    return {
-        name: processed_dir / filename
-        for name, filename in PROCESSED_FILENAMES.items()
-    }
 
 
 def load_column_list(columns_file):
@@ -401,7 +389,7 @@ def prepare_catboost_features(feature_df, categorical_cols=None):
 
 
 def build_processed_datasets(data_dir, input_columns):
-    """Load raw files and return CatBoost-ready train/test feature matrices."""
+    """Load raw files and return CatBoost-ready train/test matrices in memory."""
     data_dir = Path(data_dir)
     train_path = data_dir / "train.csv"
     test_path = data_dir / "test.csv"
@@ -446,45 +434,3 @@ def build_processed_datasets(data_dir, input_columns):
     }
 
     return X_train_prepared, y_train, X_test_prepared, metadata
-
-
-def save_processed_data(X_train, y_train, X_test, metadata, processed_dir):
-    """Write processed train/test files and metadata for the training script."""
-    paths = get_processed_paths(processed_dir)
-    paths["train_features"].parent.mkdir(parents=True, exist_ok=True)
-
-    X_train.to_csv(paths["train_features"], index=False)
-    y_train.rename("target").to_frame().to_csv(paths["target"], index=False)
-    X_test.to_csv(paths["test_features"], index=False)
-    paths["metadata"].write_text(json.dumps(metadata, indent=2) + "\n")
-
-    return paths
-
-
-def load_processed_data(processed_dir=DEFAULT_PROCESSED_DIR):
-    """Load processed files created by config/prepare_data.py."""
-    paths = get_processed_paths(processed_dir)
-    missing = [
-        str(path)
-        for path in paths.values()
-        if not path.exists()
-    ]
-    if missing:
-        raise FileNotFoundError(
-            "Processed data files are missing. Run "
-            "`python3 config/prepare_data.py` first. Missing files: "
-            f"{missing}"
-        )
-
-    metadata = json.loads(paths["metadata"].read_text())
-    categorical_cols = metadata["categorical_cols"]
-
-    X_train = pd.read_csv(paths["train_features"])
-    y_train = pd.read_csv(paths["target"])["target"].astype(int)
-    X_test = pd.read_csv(paths["test_features"])
-
-    # CSV loading can change dtypes, so restore the saved train schema.
-    X_train, _ = prepare_catboost_features(X_train, categorical_cols=categorical_cols)
-    X_test, _ = prepare_catboost_features(X_test, categorical_cols=categorical_cols)
-
-    return X_train, y_train, X_test, metadata
